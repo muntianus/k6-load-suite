@@ -1,3 +1,32 @@
 # k6 Load Suite (`k6-load-suite`)
 
-Deterministic k6 performance scenarios, HAR-to-k6 converters, and threshold profiles for PerfOps services.
+Deterministic k6 load-testing scenarios, reusable SLO threshold profiles (`smoke`, `baseline`, `stress`, `spike`), and an HTTP HAR-to-k6 Converter Service with automatic PII redaction for **Globex** (`globlex.*`) and **PerfOps** (`perfops.*`) platforms.
+
+## Architecture & Structure
+
+- `scenarios/globlex-enterprise-slo.js` — Multi-group k6 load scenario testing `globlex.shop`, `globlex.pro`, `globlex.online`, `api.globlex.pro/health`, `api.globlex.pro/enterprise/overview`, and `api.globlex.pro/quote-parse/`.
+- `scenarios/perfops-gateway-slo.js` — Edge and control-plane SLO scenario testing `perfops.tech`, `perfops.shop`, and `aco.perfops.shop/health`.
+- `lib/thresholds.js` — Reusable SLO threshold profiles (`smoke`, `baseline`, `stress`, `spike`) and response verification helpers.
+- `src/har-converter.js` — Pure JS HAR-to-k6 ES-module generator with automatic PII sanitization (`Authorization`, `Cookie`, `X-API-Key`, sensitive URL query tokens, and JSON body secrets).
+- `src/server.js` — HTTP microservice (`PORT` default `4040`) exposing scenario catalogs and live HAR-to-k6 conversion.
+- `tests/k6-load-suite.test.js` — Automated test suite using `node --test`.
+
+## Quick Start
+
+```bash
+# Run automated test suite
+npm test
+
+# Start the HAR-to-k6 & Scenario Catalog HTTP service (default port 4040)
+npm start
+
+# Run k6 scenarios (requires k6 CLI)
+k6 run --vus 1 --duration 10s scenarios/globlex-enterprise-slo.js
+k6 run --env K6_PROFILE=baseline scenarios/perfops-gateway-slo.js
+```
+
+## HTTP API (`PORT=4040`)
+
+- `GET /health` — Service health & loaded profile count.
+- `GET /api/v1/scenarios` — Lists available k6 scenarios and threshold profiles.
+- `POST /api/v1/har-to-k6` — Converts a HAR JSON payload into a clean ES-module k6 script with PII stripped.
