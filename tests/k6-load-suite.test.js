@@ -10,7 +10,13 @@ import {
   verifyResponse,
 } from '../lib/thresholds.js';
 import { convertHarToK6, sanitizeHeaders, sanitizeUrl } from '../src/har-converter.js';
-import { createServer } from '../src/server.js';
+import {
+  createServer,
+  parseSwaggerEndpoints,
+  generateK6ScriptFromSwagger,
+  executeSmokeProbe,
+  processSwaggerToK6,
+} from '../src/server.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..');
@@ -196,3 +202,153 @@ test('sanitizeUrl and sanitizeHeaders handle edge cases cleanly', () => {
   assert.equal(redactedCount, 1);
   assert.deepEqual(cleanHeaders, { 'Accept-Language': 'en-US' });
 });
+
+test('src/server.js: parseSwaggerEndpoints and generateK6ScriptFromSwagger parse OpenAPI 3, Swagger 2, and endpoint lists', () => {
+  const openapiSpec = {
+    openapi: '3.0.0',
+    servers: [{ url: 'https://api.globlex.pro/v1' }],
+    paths: {
+      '/orders/{orderId}': {
+        get: {
+          summary: 'Get Order',
+          tags: ['Orders'],
+          headers: [{ name: 'Authorization', value: 'Bearer secret_token' }],
+        },
+        post: {
+          summary: 'Create Order',
+          tags: ['Orders'],
+          requestBody: {
+            content: {
+              'application/json': {
+                example: { sku: 'EX4300', qty: 5 },
+              },
+            },
+          },
+        },
+      },
+    },
+  };
+
+  const { baseUrl, endpoints } = parseSwaggerEndpoints(openapiSpec);
+  assert.equal(baseUrl, 'https://api.globlex.pro/v1');
+  assert.equal(endpoints.length, 2);
+  assert.equal(endpoints[0].method, 'GET');
+  assert.equal(endpoints[0].url, 'https://api.globlex.pro/v1/orders/1');
+  assert.equal(endpoints[0].group, 'Orders');
+  assert.ok(!JSON.stringify(endpoints[0].headers).includes('secret_token'));
+
+  assert.equal(endpoints[1].method, 'POST');
+  assert.deepEqual(endpoints[1].body, { sku: 'EX4300', qty: 5 });
+
+  const script = generateK6ScriptFromSwagger(endpoints, { profile: 'baseline' });
+  assert.match(script, /import http from 'k6\/http';/);
+  assert.match(script, /import \{ check, group, sleep \} from 'k6';/);
+  assert.match(script, /group\('Orders'/);
+  assert.match(script, /http\.get\('https:\/\/api\.globlex\.pro\/v1\/orders\/1'/);
+  assert.match(script, /http\.post\('https:\/\/api\.globlex\.pro\/v1\/orders\/1'/);
+  assert.match(script, /check\(res, \{ 'status 200': \(r\) => r\.status === 200 \}\);/);
+});
+
+test('src/server.js: POST /api/swagger-to-k6 generates deterministic script and executes fast smoke probe with verdict GO', async () => {
+  const server = createServer();
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  try {
+    // 1. OpenAPI 3.0 spec probing /health and /api/v1/scenarios
+    const openapiPayload = {
+      openapi: '3.0.0',
+      servers: [{ url: baseUrl }],
+      paths: {
+        '/health': {
+          get: {
+            summary: 'Service Health',
+            tags: ['health-check'],
+          },
+        },
+        '/api/v1/scenarios': {
+          get: {
+            summary: 'Scenario Catalog',
+            tags: ['scenarios-catalog'],
+          },
+        },
+      },
+    };
+
+    const res = await fetch(`${baseUrl}/api/swagger-to-k6`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(openapiPayload),
+    });
+
+    assert.equal(res.status, 200);
+    const data = await res.json();
+    assert.equal(data.status, 'ok');
+    assert.equal(data.verdict, 'GO');
+    assert.equal(data.endpoints_count, 2);
+
+    // Verify k6 script structure
+    assert.ok(data.k6_script, 'Expected k6_script in response');
+    assert.match(data.k6_script, /import http from 'k6\/http';/);
+    assert.match(data.k6_script, /import \{ check, group, sleep \} from 'k6';/);
+    assert.match(data.k6_script, /group\('health-check'/);
+    assert.match(data.k6_script, /group\('scenarios-catalog'/);
+    assert.match(data.k6_script, /check\(res, \{ 'status 200': \(r\) => r\.status === 200 \}\);/);
+
+    // Verify smoke metrics
+    assert.ok(data.smoke_metrics, 'Expected smoke_metrics in response');
+    assert.equal(data.smoke_metrics.http_reqs, 2);
+    assert.equal(data.smoke_metrics.successful_probes, 2);
+    assert.equal(data.smoke_metrics.failed_probes, 0);
+    assert.equal(data.smoke_metrics.checks_rate, 1.0);
+    assert.equal(data.smoke_metrics.http_req_failed_rate, 0.0);
+    assert.deepEqual(data.smoke_metrics.status_codes, [200, 200]);
+    assert.ok(typeof data.smoke_metrics.duration_ms === 'number');
+    assert.ok(typeof data.smoke_metrics.http_req_duration_p95 === 'number');
+
+    // 2. Endpoint list payload
+    const listRes = await fetch(`${baseUrl}/api/swagger-to-k6`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        baseUrl,
+        endpoints: [{ path: '/health', method: 'GET' }],
+      }),
+    });
+    assert.equal(listRes.status, 200);
+    const listData = await listRes.json();
+    assert.equal(listData.status, 'ok');
+    assert.equal(listData.verdict, 'GO');
+    assert.equal(listData.smoke_metrics.http_reqs, 1);
+    assert.equal(listData.smoke_metrics.successful_probes, 1);
+
+    // 3. Failing endpoint results in verdict NO-GO
+    const failRes = await fetch(`${baseUrl}/api/swagger-to-k6`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        baseUrl,
+        endpoints: [{ path: '/non-existent-probe-route', method: 'GET' }],
+      }),
+    });
+    assert.equal(failRes.status, 200);
+    const failData = await failRes.json();
+    assert.equal(failData.verdict, 'NO-GO');
+    assert.equal(failData.smoke_metrics.failed_probes, 1);
+    assert.deepEqual(failData.smoke_metrics.status_codes, [404]);
+
+    // 4. Invalid spec returns 400
+    const badRes = await fetch(`${baseUrl}/api/swagger-to-k6`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ invalid: true }),
+    });
+    assert.equal(badRes.status, 400);
+    const badData = await badRes.json();
+    assert.ok(badData.error);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
