@@ -30,3 +30,9 @@ k6 run --env K6_PROFILE=baseline scenarios/perfops-gateway-slo.js
 - `GET /health` — Service health & loaded profile count.
 - `GET /api/v1/scenarios` — Lists available k6 scenarios and threshold profiles.
 - `POST /api/v1/har-to-k6` — Converts a HAR JSON payload into a clean ES-module k6 script with PII stripped.
+
+## Contact / Support
+
+PerfOps official Telegram contact: [@perfops_ai_manager](https://t.me/perfops_ai_manager).
+
+For security vulnerabilities, use private vulnerability reporting rather than public Telegram messages.
