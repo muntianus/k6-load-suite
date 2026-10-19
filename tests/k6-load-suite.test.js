@@ -250,6 +250,10 @@ test('src/server.js: parseSwaggerEndpoints and generateK6ScriptFromSwagger parse
 });
 
 test('src/server.js: POST /api/swagger-to-k6 generates deterministic script and executes fast smoke probe with verdict GO', async () => {
+  // Loopback is intentionally blocked by the SSRF guard; the test explicitly opts in via allowlist.
+  const previousAllowlist = process.env.SWAGGER_FETCH_ALLOWLIST;
+  process.env.SWAGGER_FETCH_ALLOWLIST = '127.0.0.1';
+
   const server = createServer();
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address();
@@ -348,6 +352,11 @@ test('src/server.js: POST /api/swagger-to-k6 generates deterministic script and 
     const badData = await badRes.json();
     assert.ok(badData.error);
   } finally {
+    if (previousAllowlist === undefined) {
+      delete process.env.SWAGGER_FETCH_ALLOWLIST;
+    } else {
+      process.env.SWAGGER_FETCH_ALLOWLIST = previousAllowlist;
+    }
     await new Promise((resolve) => server.close(resolve));
   }
 });
