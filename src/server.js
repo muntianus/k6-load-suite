@@ -2,6 +2,14 @@ import http from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { THRESHOLD_PROFILES, buildOptions } from '../lib/thresholds.js';
 import { convertHarToK6, sanitizeHeaders, sanitizeUrl } from './har-converter.js';
+import {
+  DEFAULT_MAX_RESPONSE_BYTES,
+  DEFAULT_TIMEOUT_MS,
+  SsrfError,
+  assertSafeUrl,
+  parseAllowlist,
+  safeFetch,
+} from './url-guard.js';
 
 export const SCENARIO_CATALOG = Object.freeze([
   {
@@ -327,12 +335,16 @@ export function generateK6ScriptFromSwagger(endpoints, options = {}) {
 
 /**
  * Executes a fast smoke probe against the extracted endpoints and computes latency & SLO metrics.
+ * Outbound requests go through safeFetch: private/metadata targets and redirects to them are
+ * rejected with SsrfError (HTTP 400) instead of being recorded as a probe failure.
  * @param {Array<object>} endpoints
  * @param {object} [options]
  * @returns {Promise<{ smoke_metrics: object, verdict: 'GO' | 'NO-GO', results: Array<object> }>}
  */
 export async function executeSmokeProbe(endpoints, options = {}) {
-  const timeoutMs = options.timeoutMs || 3000;
+  const timeoutMs = options.timeoutMs || DEFAULT_TIMEOUT_MS;
+  const maxResponseBytes = options.maxResponseBytes || DEFAULT_MAX_RESPONSE_BYTES;
+  const allowlist = options.allowlist ?? parseAllowlist();
   const results = [];
   const startTotal = performance.now();
 
@@ -352,13 +364,13 @@ export async function executeSmokeProbe(endpoints, options = {}) {
         continue;
       }
 
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
-
       const fetchOptions = {
         method: ep.method,
         headers: ep.headers || {},
-        signal: controller.signal,
+        timeoutMs,
+        maxResponseBytes,
+        allowlist,
+        signal: options.signal,
       };
 
       if (ep.body && ['POST', 'PUT', 'PATCH'].includes(ep.method)) {
@@ -366,8 +378,7 @@ export async function executeSmokeProbe(endpoints, options = {}) {
           typeof ep.body === 'string' ? ep.body : JSON.stringify(ep.body);
       }
 
-      const res = await fetch(ep.url, fetchOptions);
-      clearTimeout(timer);
+      const res = await safeFetch(ep.url, fetchOptions);
       const duration = Math.round((performance.now() - startReq) * 100) / 100;
 
       results.push({
@@ -378,6 +389,10 @@ export async function executeSmokeProbe(endpoints, options = {}) {
         ok: res.status >= 200 && res.status < 400,
       });
     } catch (err) {
+      // A policy violation must fail the whole request, never be downgraded to a NO-GO probe.
+      if (err instanceof SsrfError) {
+        throw err;
+      }
       const duration = Math.round((performance.now() - startReq) * 100) / 100;
       results.push({
         url: ep.url,
@@ -433,10 +448,22 @@ export async function processSwaggerToK6(body = {}) {
   const { baseUrl, endpoints } = parseSwaggerEndpoints(body);
   const profile = body.profile || 'smoke';
   const k6_script = generateK6ScriptFromSwagger(endpoints, { profile });
+  const mockProbe = Boolean(body.mockProbe);
+  const allowlist = parseAllowlist();
+
+  // Fail fast on private/metadata targets before touching the network. Mock probes never fetch,
+  // so offline conversion of specs pointing at local services keeps working.
+  if (!mockProbe) {
+    for (const ep of endpoints) {
+      assertSafeUrl(ep.url, { allowlist });
+    }
+  }
 
   const probeOptions = {
-    timeoutMs: body.timeoutMs || 3000,
-    mockProbe: Boolean(body.mockProbe),
+    timeoutMs: Math.min(Number(body.timeoutMs) || DEFAULT_TIMEOUT_MS, DEFAULT_TIMEOUT_MS),
+    maxResponseBytes: DEFAULT_MAX_RESPONSE_BYTES,
+    allowlist,
+    mockProbe,
     mockStatus: body.mockStatus,
     mockLatencyMs: body.mockLatencyMs,
   };
