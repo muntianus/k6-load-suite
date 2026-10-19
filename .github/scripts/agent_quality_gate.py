@@ -5,10 +5,10 @@ import subprocess
 import sys
 
 REQUIRED_HEADINGS = {
-    "linear": r"(?mi)^\s*Linear(?:\s+issue)?\s*:\s*YAP-\d+\b",
-    "acceptance criteria": r"(?mi)^\s*Acceptance criteria\s*:\s*\S+",
-    "tests": r"(?mi)^\s*Tests\s*:\s*(?!pending\b|none\b|n/a\b)\S+",
-    "risk": r"(?mi)^\s*Risk\s*:\s*(low|medium|high|critical)\b",
+    "linear": r"(?mi)^[ \t]*Linear(?:[ \t]+issue)?[ \t]*:[ \t]*YAP-\d+\b",
+    "acceptance criteria": r"(?mi)^[ \t]*Acceptance criteria[ \t]*:[ \t]*\S[^\r\n]*",
+    "tests": r"(?mi)^[ \t]*Tests[ \t]*:[ \t]*(?!(?:pending|none|n/a)\b)\S[^\r\n]*",
+    "risk": r"(?mi)^[ \t]*Risk[ \t]*:[ \t]*(low|medium|high|critical)\b",
 }
 
 def api(path):
@@ -45,7 +45,7 @@ def validate(pr, reviews, checks, head_sha):
         errors.append("no independent approval on exact PR head SHA")
     if any(r.get("state") == "CHANGES_REQUESTED" for r in current_reviews):
         errors.append("unresolved changes requested by reviewer")
-    if re.search(r"(?mi)^\s*Risk\s*:\s*(high|critical)\b", body):
+    if re.search(r"(?mi)^[ \t]*Risk[ \t]*:[ \t]*(high|critical)\b", body):
         humans = [r for r in approvals if (r.get("user") or {}).get("type") != "Bot"]
         if not humans:
             errors.append("high/critical risk requires independent human review")
