@@ -19,7 +19,7 @@ jobs:
   agent-evidence:
     name: agent-evidence
     if: startsWith(github.event.pull_request.head.ref, 'agent/')
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, hostinger-vps]
     timeout-minutes: 5
     steps:
       - name: Checkout trusted base policy (never PR head)
