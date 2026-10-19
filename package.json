@@ -6,7 +6,7 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "test": "node --test tests/k6-load-suite.test.js",
+    "test": "node --test tests/*.test.js",
     "smoke": "k6 run --vus 1 --duration 10s smoke.js",
     "smoke:globlex": "k6 run --vus 1 --duration 10s scenarios/globlex-enterprise-slo.js",
     "smoke:perfops": "k6 run --vus 1 --duration 10s scenarios/perfops-gateway-slo.js"

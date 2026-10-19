@@ -19,4 +19,4 @@ jobs:
           node-version: '20'
 
       - name: Run unit & integration tests
-        run: node --test tests/k6-load-suite.test.js
+        run: node --test tests/*.test.js
