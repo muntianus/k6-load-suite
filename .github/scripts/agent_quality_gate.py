@@ -5,10 +5,10 @@ import subprocess
 import sys
 
 REQUIRED_HEADINGS = {
-    "linear": r"(?mi)^\s*Linear(?:\s+issue)?\s*:\s*YAP-\d+\b",
-    "acceptance criteria": r"(?mi)^\s*Acceptance criteria\s*:\s*\S+",
-    "tests": r"(?mi)^\s*Tests\s*:\s*(?!pending\b|none\b|n/a\b)\S+",
-    "risk": r"(?mi)^\s*Risk\s*:\s*(low|medium|high|critical)\b",
+    "linear": r"(?mi)^[ \t]*Linear(?:[ \t]+issue)?[ \t]*:[ \t]*YAP-\d+\b",
+    "acceptance criteria": r"(?mi)^[ \t]*Acceptance criteria[ \t]*:[ \t]*\S[^\r\n]*",
+    "tests": r"(?mi)^[ \t]*Tests[ \t]*:[ \t]*(?!(?:pending|none|n/a)\b)\S[^\r\n]*",
+    "risk": r"(?mi)^[ \t]*Risk[ \t]*:[ \t]*(low|medium|high|critical)\b",
 }
 
 def api(path):
@@ -29,25 +29,53 @@ def validate(pr, reviews, checks, head_sha):
     if pr.get("draft"):
         errors.append("draft PR cannot pass release gate")
     author = (pr.get("user") or {}).get("login", "").lower()
-    approvals = [r for r in reviews if r.get("state") == "APPROVED"
+    latest_reviews = {}
+    for index, r in enumerate(reviews):
+        user = (r.get("user") or {}).get("login", "").lower()
+        if not user:
+            continue
+        order = (r.get("submitted_at") or "", int(r.get("id") or 0), index)
+        if user not in latest_reviews or order > latest_reviews[user][0]:
+            latest_reviews[user] = (order, r)
+    current_reviews = [item[1] for item in latest_reviews.values()]
+    approvals = [r for r in current_reviews if r.get("state") == "APPROVED"
                  and r.get("commit_id") == head_sha
-                 and (r.get("user") or {}).get("login", "").lower() not in ("", author)]
+                 and (r.get("user") or {}).get("login", "").lower() != author]
     if not approvals:
         errors.append("no independent approval on exact PR head SHA")
-    if re.search(r"(?mi)^\s*Risk\s*:\s*(high|critical)\b", body):
+    if any(r.get("state") == "CHANGES_REQUESTED" for r in current_reviews):
+        errors.append("unresolved changes requested by reviewer")
+    if re.search(r"(?mi)^[ \t]*Risk[ \t]*:[ \t]*(high|critical)\b", body):
         humans = [r for r in approvals if (r.get("user") or {}).get("type") != "Bot"]
         if not humans:
             errors.append("high/critical risk requires independent human review")
-    eligible = [c for c in checks if c.get("head_sha") == head_sha
-                and c.get("status") == "completed"
-                and c.get("conclusion") == "success"
-                and (c.get("app") or {}).get("slug") == "github-actions"]
-    if not any(c.get("name") in ("qa", "ai-review") for c in eligible):
+    latest_checks = {}
+    for index, c in enumerate(checks):
+        if c.get("head_sha") != head_sha or (c.get("app") or {}).get("slug") != "github-actions":
+            continue
+        name = c.get("name")
+        if not name:
+            continue
+        order = (c.get("started_at") or c.get("created_at") or "", int(c.get("id") or 0), index)
+        if name not in latest_checks or order > latest_checks[name][0]:
+            latest_checks[name] = (order, c)
+    current_checks = [item[1] for item in latest_checks.values()]
+    eligible = [c for c in current_checks if c.get("status") == "completed"
+                and c.get("conclusion") == "success"]
+    qa_checks = [c for c in current_checks if c.get("name") in ("qa", "ai-review")]
+    if not any(c in eligible for c in qa_checks):
         errors.append("no successful independent qa/ai-review check on exact SHA")
+    if any(c.get("status") != "completed" or c.get("conclusion") != "success" for c in qa_checks):
+        errors.append("qa/ai-review has failed, skipped or pending latest result")
     test_names = re.compile(r"(?:^|[^a-z])(tests?|lint|build|ci|typecheck|security|quality)(?:[^a-z]|$)", re.I)
-    if not any(test_names.search(c.get("name") or "") for c in eligible
-               if c.get("name") not in ("qa", "ai-review", "agent-contract")):
+    test_checks = [c for c in current_checks if test_names.search(c.get("name") or "")
+                   and c.get("name") not in ("qa", "ai-review", "agent-contract")]
+    if not any(c in eligible for c in test_checks):
         errors.append("no successful deterministic CI/test check on exact SHA")
+    if any(c.get("conclusion") not in ("success",) or c.get("status") != "completed"
+           for c in test_checks):
+        errors.append("deterministic CI/test has failed, skipped or pending latest result")
+
     return errors
 
 def main():
