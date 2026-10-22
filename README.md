@@ -43,8 +43,8 @@ k6 run --env K6_PROFILE=baseline scenarios/perfops-gateway-slo.js
 
 - **Contract:** [`docs/api/openapi.json`](docs/api/openapi.json) (OpenAPI 3.1).
   `tests/openapi-contract.test.js` fails when `ROUTES` in `src/server.js` and the spec disagree.
-- **Tests:** `npm test` — Node's built-in runner, no dependencies. CI runs it plus the
-  org security gate (gitleaks) on every pull request.
+- **Tests:** `npm test` — Node's built-in runner, no dependencies. CI runs it on every pull request;
+  GitGuardian scans each one for secrets.
 - **Config:** every environment variable is listed in [`.env.example`](.env.example).
 - **Deploy:** `docker build -t k6-load-suite . && docker run -p 4040:4040 k6-load-suite` — `node:22-alpine`,
   non-root, `HEALTHCHECK` on `GET /health`. The portfolio port map lives in
