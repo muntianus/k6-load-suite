@@ -1,7 +1,8 @@
 # AGENTS.md — k6-load-suite
 
-Org-wide rules: [`muntianus/.github/AGENT_POLICY.md`](https://github.com/muntianus/.github/blob/main/AGENT_POLICY.md)
-and the [Repository Standard](https://github.com/muntianus/.github/blob/main/docs/standards/REPOSITORY_STANDARD.md).
+> Canon: `~/github/vault/personal/agent-config/AGENTS.md`
+> Org policy: [`muntianus/.github/AGENT_POLICY.md`](https://github.com/muntianus/.github/blob/main/AGENT_POLICY.md) ·
+> [Repository Standard](https://github.com/muntianus/.github/blob/main/docs/standards/REPOSITORY_STANDARD.md)
 
 ## Repo-local rules
 
