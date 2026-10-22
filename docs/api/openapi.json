@@ -1,0 +1,533 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "k6 Load Suite",
+    "version": "1.0.0",
+    "description": "k6 scenario catalog, SLO threshold profiles, PII-safe HAR-to-k6 and OpenAPI-to-k6 converters."
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:4040",
+      "description": "Local / VPS loopback"
+    }
+  ],
+  "paths": {
+    "/health": {
+      "get": {
+        "operationId": "getHealth",
+        "summary": "Liveness probe (no dependencies)",
+        "tags": [
+          "ops"
+        ],
+        "responses": {
+          "200": {
+            "description": "Service is up",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/scenarios": {
+      "get": {
+        "operationId": "listScenarios",
+        "summary": "Scenario catalog and SLO threshold profiles",
+        "tags": [
+          "scenarios"
+        ],
+        "parameters": [
+          {
+            "name": "profile",
+            "in": "query",
+            "required": false,
+            "description": "Resolve k6 options for this profile (unknown names fall back to smoke)",
+            "schema": {
+              "type": "string",
+              "examples": [
+                "smoke",
+                "baseline",
+                "stress",
+                "spike"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Catalog",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "scenarios",
+                    "thresholdProfiles"
+                  ],
+                  "properties": {
+                    "scenarios": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "thresholdProfiles": {
+                      "type": "object"
+                    },
+                    "resolvedOptions": {
+                      "type": "object",
+                      "description": "Only with ?profile="
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/har-to-k6": {
+      "post": {
+        "operationId": "convertHarToK6",
+        "summary": "Convert a HAR recording into a k6 script with PII redaction",
+        "description": "Send `{ har, profile, includeStaticAssets }` or a bare HAR document (`{ log: { entries } }`).",
+        "tags": [
+          "converters"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/HarToK6Request"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Har"
+                  }
+                ]
+              },
+              "example": {
+                "profile": "smoke",
+                "har": {
+                  "log": {
+                    "entries": [
+                      {
+                        "request": {
+                          "method": "GET",
+                          "url": "https://globlex.pro/api/v1/catalog",
+                          "headers": []
+                        },
+                        "response": {
+                          "status": 200
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Generated script",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "status",
+                    "script"
+                  ],
+                  "properties": {
+                    "status": {
+                      "const": "converted"
+                    },
+                    "profile": {
+                      "type": "string"
+                    },
+                    "script": {
+                      "type": "string"
+                    },
+                    "stats": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed JSON",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body over 2 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Not a HAR document",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/swagger-to-k6": {
+      "post": {
+        "operationId": "swaggerToK6",
+        "summary": "Generate a k6 script from an OpenAPI/Swagger spec and smoke-probe it",
+        "description": "Live smoke probes only go to public hosts (private, loopback, link-local and metadata ranges are refused; DNS is pinned and redirects re-validated) unless SWAGGER_FETCH_ALLOWLIST lists them. `mockProbe: true` never touches the network.",
+        "tags": [
+          "converters"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SwaggerToK6Request"
+              },
+              "example": {
+                "spec": {
+                  "openapi": "3.0.3",
+                  "servers": [
+                    {
+                      "url": "https://api.globlex.pro"
+                    }
+                  ],
+                  "paths": {
+                    "/health": {
+                      "get": {
+                        "summary": "Health"
+                      }
+                    }
+                  }
+                },
+                "profile": "smoke",
+                "mockProbe": true
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Generated k6 script, smoke metrics and GO/NO_GO verdict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SwaggerToK6Result"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing spec, malformed JSON, or a probe target refused by the SSRF guard",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body over 2 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Spec has an unusable shape",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/swagger-to-k6": {
+      "post": {
+        "operationId": "swaggerToK6Legacy",
+        "summary": "Legacy unversioned alias of /api/v1/swagger-to-k6",
+        "description": "Live smoke probes only go to public hosts (private, loopback, link-local and metadata ranges are refused; DNS is pinned and redirects re-validated) unless SWAGGER_FETCH_ALLOWLIST lists them. `mockProbe: true` never touches the network.",
+        "tags": [
+          "converters"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SwaggerToK6Request"
+              },
+              "example": {
+                "spec": {
+                  "openapi": "3.0.3",
+                  "servers": [
+                    {
+                      "url": "https://api.globlex.pro"
+                    }
+                  ],
+                  "paths": {
+                    "/health": {
+                      "get": {
+                        "summary": "Health"
+                      }
+                    }
+                  }
+                },
+                "profile": "smoke",
+                "mockProbe": true
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Generated k6 script, smoke metrics and GO/NO_GO verdict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SwaggerToK6Result"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing spec, malformed JSON, or a probe target refused by the SSRF guard",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body over 2 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Spec has an unusable shape",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "deprecated": true
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        }
+      },
+      "Health": {
+        "type": "object",
+        "required": [
+          "status",
+          "service",
+          "version"
+        ],
+        "properties": {
+          "status": {
+            "const": "ok"
+          },
+          "service": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "scenarios": {
+            "type": "integer"
+          },
+          "profiles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "Har": {
+        "type": "object",
+        "required": [
+          "log"
+        ],
+        "properties": {
+          "log": {
+            "type": "object",
+            "required": [
+              "entries"
+            ],
+            "properties": {
+              "entries": {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      },
+      "HarToK6Request": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "har"
+        ],
+        "properties": {
+          "har": {
+            "$ref": "#/components/schemas/Har"
+          },
+          "profile": {
+            "type": "string",
+            "enum": [
+              "smoke",
+              "baseline",
+              "stress",
+              "spike"
+            ],
+            "default": "smoke"
+          },
+          "includeStaticAssets": {
+            "type": "boolean",
+            "default": false
+          }
+        }
+      },
+      "SwaggerToK6Request": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Send the document as `spec`, `swagger` or `openapi`.",
+        "properties": {
+          "spec": {
+            "type": "object"
+          },
+          "swagger": {
+            "type": "object"
+          },
+          "openapi": {
+            "type": "object"
+          },
+          "baseUrl": {
+            "type": "string",
+            "format": "uri"
+          },
+          "host": {
+            "type": "string"
+          },
+          "profile": {
+            "type": "string",
+            "enum": [
+              "smoke",
+              "baseline",
+              "stress",
+              "spike"
+            ],
+            "default": "smoke"
+          },
+          "mockProbe": {
+            "type": "boolean",
+            "default": false
+          },
+          "mockStatus": {
+            "type": "integer"
+          },
+          "mockLatencyMs": {
+            "type": "number"
+          },
+          "timeoutMs": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "SwaggerToK6Result": {
+        "type": "object",
+        "required": [
+          "status",
+          "k6_script",
+          "smoke_metrics",
+          "verdict"
+        ],
+        "properties": {
+          "status": {
+            "const": "ok"
+          },
+          "k6_script": {
+            "type": "string"
+          },
+          "smoke_metrics": {
+            "type": "object"
+          },
+          "verdict": {
+            "type": "string"
+          },
+          "endpoints_count": {
+            "type": "integer"
+          },
+          "baseUrl": {
+            "type": "string"
+          },
+          "profile": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

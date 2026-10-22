@@ -481,6 +481,74 @@ export async function processSwaggerToK6(body = {}) {
   };
 }
 
+function health(req, res) {
+  return sendJson(res, 200, {
+    status: 'ok',
+    service: 'k6-load-suite',
+    version: '1.0.0',
+    scenarios: SCENARIO_CATALOG.length,
+    profiles: Object.keys(THRESHOLD_PROFILES),
+  });
+}
+
+function listScenarios(req, res, url) {
+  const requestedProfile = url.searchParams.get('profile');
+  return sendJson(res, 200, {
+    scenarios: SCENARIO_CATALOG,
+    thresholdProfiles: THRESHOLD_PROFILES,
+    resolvedOptions: requestedProfile ? buildOptions(requestedProfile) : undefined,
+  });
+}
+
+async function harToK6(req, res) {
+  try {
+    const body = await readJsonBody(req);
+    const harPayload = body.har ? body.har : body;
+    const result = convertHarToK6(harPayload, {
+      profile: body.profile || 'smoke',
+      includeStaticAssets: Boolean(body.includeStaticAssets),
+    });
+
+    return sendJson(res, 200, {
+      status: 'converted',
+      profile: body.profile || 'smoke',
+      script: result.script,
+      stats: result.stats,
+    });
+  } catch (err) {
+    const status = err.statusCode || (err instanceof TypeError ? 422 : 400);
+    return sendJson(res, status, {
+      error: err.message || 'Failed to convert HAR payload',
+    });
+  }
+}
+
+async function swaggerToK6(req, res) {
+  try {
+    const body = await readJsonBody(req);
+    const result = await processSwaggerToK6(body);
+    return sendJson(res, 200, result);
+  } catch (err) {
+    const status = err.statusCode || (err instanceof TypeError ? 422 : 400);
+    return sendJson(res, status, {
+      error: err.message || 'Failed to process OpenAPI/Swagger spec',
+    });
+  }
+}
+
+/**
+ * Every route the service answers. tests/openapi-contract.test.js keeps this
+ * table and docs/api/openapi.json in lockstep.
+ */
+export const ROUTES = [
+  { method: 'GET', path: '/health', handler: health },
+  { method: 'GET', path: '/api/v1/scenarios', handler: listScenarios },
+  { method: 'POST', path: '/api/v1/har-to-k6', handler: harToK6 },
+  { method: 'POST', path: '/api/v1/swagger-to-k6', handler: swaggerToK6 },
+  // Legacy unversioned alias kept for existing callers.
+  { method: 'POST', path: '/api/swagger-to-k6', handler: swaggerToK6 },
+];
+
 /**
  * Creates the k6-load-suite HTTP server instance.
  * @returns {import('node:http').Server}
@@ -488,65 +556,10 @@ export async function processSwaggerToK6(body = {}) {
 export function createServer() {
   return http.createServer(async (req, res) => {
     const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
-
-    if (req.method === 'GET' && url.pathname === '/health') {
-      return sendJson(res, 200, {
-        status: 'ok',
-        service: 'k6-load-suite',
-        version: '1.0.0',
-        scenarios: SCENARIO_CATALOG.length,
-        profiles: Object.keys(THRESHOLD_PROFILES),
-      });
+    const route = ROUTES.find((r) => r.method === req.method && r.path === url.pathname);
+    if (route) {
+      return route.handler(req, res, url);
     }
-
-    if (req.method === 'GET' && url.pathname === '/api/v1/scenarios') {
-      const requestedProfile = url.searchParams.get('profile');
-      return sendJson(res, 200, {
-        scenarios: SCENARIO_CATALOG,
-        thresholdProfiles: THRESHOLD_PROFILES,
-        resolvedOptions: requestedProfile ? buildOptions(requestedProfile) : undefined,
-      });
-    }
-
-    if (req.method === 'POST' && url.pathname === '/api/v1/har-to-k6') {
-      try {
-        const body = await readJsonBody(req);
-        const harPayload = body.har ? body.har : body;
-        const result = convertHarToK6(harPayload, {
-          profile: body.profile || 'smoke',
-          includeStaticAssets: Boolean(body.includeStaticAssets),
-        });
-
-        return sendJson(res, 200, {
-          status: 'converted',
-          profile: body.profile || 'smoke',
-          script: result.script,
-          stats: result.stats,
-        });
-      } catch (err) {
-        const status = err.statusCode || (err instanceof TypeError ? 422 : 400);
-        return sendJson(res, status, {
-          error: err.message || 'Failed to convert HAR payload',
-        });
-      }
-    }
-
-    if (
-      req.method === 'POST' &&
-      (url.pathname === '/api/swagger-to-k6' || url.pathname === '/api/v1/swagger-to-k6')
-    ) {
-      try {
-        const body = await readJsonBody(req);
-        const result = await processSwaggerToK6(body);
-        return sendJson(res, 200, result);
-      } catch (err) {
-        const status = err.statusCode || (err instanceof TypeError ? 422 : 400);
-        return sendJson(res, status, {
-          error: err.message || 'Failed to process OpenAPI/Swagger spec',
-        });
-      }
-    }
-
     return sendJson(res, 404, { error: 'Not Found', path: url.pathname });
   });
 }
