@@ -6,17 +6,32 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
+    name: k6 Load Suite tests + API contract
     runs-on: [self-hosted, linux, x64, hostinger-vps]
+    timeout-minutes: 10
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@1d0ff469b7ec7b3cb9d8673fde0c81c44821de2a # v4.2.0
         with:
-          node-version: '20'
+          node-version: '22'
+      - name: Syntax check
+        run: git ls-files '*.js' '*.mjs' | xargs -r -n1 node --check
+      - name: Unit, HTTP and contract tests
+        run: npm test
 
-      - name: Run unit & integration tests
-        run: node --test tests/*.test.js
+  security:
+    uses: muntianus/.github/.github/workflows/reusable-security-gate.yml@72f1a15326dc0cb34a352adf3e9558b864904c27 # main
+    # the gate declares pull-requests: read at workflow level; a caller
+    # granting less makes the run fail at startup
+    permissions:
+      contents: read
+      pull-requests: read
